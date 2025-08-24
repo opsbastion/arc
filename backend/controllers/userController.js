@@ -1440,7 +1440,7 @@ const sendInviteMessage = async (teamId, playerId, inviteType, inviteData) => {
 // Get current user's profile with team ownership/staff info for compatibility
 const getCurrentUserProfile = async (req, res) => {
 	try {
-		const currentUser = await User.findById(req.user._id);
+		const currentUser = req.user;
 		if (!currentUser || !currentUser.isActive) {
 			return res.status(404).json({ success: false, message: 'User not found' });
 		}
