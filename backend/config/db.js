@@ -1,62 +1,95 @@
 const mongoose = require('mongoose');
+const { MongoMemoryServer } = require('mongodb-memory-server');
+
+let inMemoryServer = null;
+let hasTriedInMemory = false;
+
+const connectToMongoUri = async (uri) => {
+	return mongoose.connect(uri, {
+		maxPoolSize: 10,
+		serverSelectionTimeoutMS: 5000,
+		socketTimeoutMS: 45000,
+		retryWrites: true,
+		w: 'majority',
+		minPoolSize: 1,
+		maxIdleTimeMS: 30000,
+		connectTimeoutMS: 10000,
+		heartbeatFrequencyMS: 10000
+	});
+};
+
+const startInMemoryMongo = async () => {
+	if (hasTriedInMemory) return;
+	hasTriedInMemory = true;
+	try {
+		inMemoryServer = await MongoMemoryServer.create();
+		const uri = inMemoryServer.getUri();
+		await connectToMongoUri(uri);
+		console.log(`MongoDB (in-memory) Connected: ${uri}`);
+		setupConnectionEventHandlers();
+		setupGracefulShutdown();
+	} catch (err) {
+		console.error('Failed to start in-memory MongoDB:', err);
+		throw err;
+	}
+};
+
+const setupConnectionEventHandlers = () => {
+	mongoose.connection.on('error', (err) => {
+		console.error('MongoDB connection error:', err);
+	});
+
+	mongoose.connection.on('disconnected', () => {
+		console.log('MongoDB disconnected');
+	});
+
+	mongoose.connection.on('reconnected', () => {
+		console.log('MongoDB reconnected');
+	});
+};
+
+const setupGracefulShutdown = () => {
+	process.on('SIGINT', async () => {
+		try {
+			await mongoose.connection.close();
+			if (inMemoryServer) {
+				await inMemoryServer.stop();
+			}
+			console.log('MongoDB connection closed through app termination');
+			process.exit(0);
+		} catch (err) {
+			console.error('Error closing MongoDB connection:', err);
+			process.exit(1);
+		}
+	});
+};
 
 const connectDB = async () => {
-  try {
-    const conn = await mongoose.connect(process.env.MONGODB_URI, {
-      maxPoolSize: 10, // Maintain up to 10 socket connections
-      serverSelectionTimeoutMS: 5000, // Keep trying to send operations for 5 seconds
-      socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-      retryWrites: true,
-      w: 'majority',
-      // Additional recommended options for stability
-      minPoolSize: 1, // Minimum number of connections in the pool
-      maxIdleTimeMS: 30000, // Close connections after 30 seconds of inactivity
-      connectTimeoutMS: 10000, // Give up initial connection after 10 seconds
-      heartbeatFrequencyMS: 10000 // Send a heartbeat every 10 seconds
-    });
+	try {
+		const conn = await connectToMongoUri(process.env.MONGODB_URI);
+		console.log(`MongoDB Connected: ${conn.connection.host}`);
+		setupConnectionEventHandlers();
+		setupGracefulShutdown();
+	} catch (error) {
+		console.error('Database connection error:', error.message);
+		console.error('Full error details:', error);
 
-    console.log(`MongoDB Connected: ${conn.connection.host}`);
-    
-    // Handle connection events
-    mongoose.connection.on('error', (err) => {
-      console.error('MongoDB connection error:', err);
-    });
+		if (error.message.includes('Invalid connection string')) {
+			console.error('Please check your MONGODB_URI environment variable');
+		}
 
-    mongoose.connection.on('disconnected', () => {
-      console.log('MongoDB disconnected');
-    });
+		const allowInMemory = process.env.ALLOW_IN_MEMORY_DB !== 'false';
+		if (allowInMemory) {
+			console.log('Attempting to start in-memory MongoDB as fallback...');
+			await startInMemoryMongo();
+			return;
+		}
 
-    mongoose.connection.on('reconnected', () => {
-      console.log('MongoDB reconnected');
-    });
-
-    // Graceful shutdown
-    process.on('SIGINT', async () => {
-      try {
-        await mongoose.connection.close();
-        console.log('MongoDB connection closed through app termination');
-        process.exit(0);
-      } catch (err) {
-        console.error('Error closing MongoDB connection:', err);
-        process.exit(1);
-      }
-    });
-
-  } catch (error) {
-    console.error('Database connection error:', error.message);
-    console.error('Full error details:', error);
-    
-    // Check if it's a connection string issue
-    if (error.message.includes('Invalid connection string')) {
-      console.error('Please check your MONGODB_URI environment variable');
-    }
-    
-    // Retry connection after 5 seconds
-    setTimeout(() => {
-      console.log('Retrying database connection...');
-      connectDB();
-    }, 5000);
-  }
+		setTimeout(() => {
+			console.log('Retrying database connection...');
+			connectDB();
+		}, 5000);
+	}
 };
 
 module.exports = connectDB;
