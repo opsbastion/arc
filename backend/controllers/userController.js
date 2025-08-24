@@ -1437,6 +1437,110 @@ const sendInviteMessage = async (teamId, playerId, inviteType, inviteData) => {
   }
 };
 
+// Get current user's profile with team ownership/staff info for compatibility
+const getCurrentUserProfile = async (req, res) => {
+	try {
+		const currentUser = await User.findById(req.user._id);
+		if (!currentUser || !currentUser.isActive) {
+			return res.status(404).json({ success: false, message: 'User not found' });
+		}
+
+		const profileResponse = { userId: currentUser._id };
+
+		// For team users: treat the current user as the owned team
+		if (currentUser.userType === 'team') {
+			await currentUser.populateTeamInfo();
+			const teamSummary = {
+				_id: currentUser._id,
+				teamName: currentUser.profile?.displayName || currentUser.username,
+				staff: (currentUser.teamInfo?.staff || []).map((s) => ({
+					user: s.user,
+					role: s.role,
+					joinedAt: s.joinedAt,
+					leftAt: s.leftAt,
+					isActive: s.isActive
+				}))
+			};
+			profileResponse.teamInfo = { ownedTeams: [teamSummary] };
+		} else {
+			// For player users: find teams where user is active staff
+			const teams = await User.find({
+				userType: 'team',
+				'teamInfo.staff': { $elemMatch: { user: currentUser._id, isActive: true } }
+			});
+			const staffMemberships = teams.map((team) => {
+				const staffEntry = team.teamInfo.staff.find((s) => s.user.toString() === currentUser._id.toString() && s.isActive);
+				return {
+					team: {
+						_id: team._id,
+						teamName: team.profile?.displayName || team.username
+					},
+					role: staffEntry?.role || 'Member',
+					isActive: true
+				};
+			});
+			profileResponse.teamInfo = { staff: staffMemberships };
+		}
+
+		return res.status(200).json(profileResponse);
+	} catch (error) {
+		return res.status(500).json({ success: false, message: 'Failed to fetch profile', error: error.message });
+	}
+};
+
+// Directly add a staff member to a team by username (compatibility for tests)
+const addStaffDirect = async (req, res) => {
+	try {
+		const teamId = req.params.id;
+		const { username } = req.body;
+		let { role } = req.body;
+		if (!role) role = 'Manager';
+
+		const team = await User.findById(teamId);
+		if (!team || team.userType !== 'team') {
+			return res.status(404).json({ success: false, message: 'Team not found' });
+		}
+
+		// Only team owner can add staff directly
+		if (team._id.toString() !== req.user._id.toString()) {
+			return res.status(403).json({ success: false, message: 'Only team owners can add staff' });
+		}
+
+		const member = await User.findOne({ username });
+		if (!member) {
+			return res.status(404).json({ success: false, message: `User with username '${username}' not found` });
+		}
+
+		// Already a staff member?
+		const existingStaff = (team.teamInfo?.staff || []).find((s) => s.user.toString() === member._id.toString() && s.isActive);
+		if (existingStaff) {
+			return res.status(400).json({ success: false, message: 'already a staff member' });
+		}
+
+		// Add to team staff
+		team.teamInfo = team.teamInfo || {};
+		team.teamInfo.staff = team.teamInfo.staff || [];
+		team.teamInfo.staff.push({ user: member._id, role, isActive: true, joinedAt: new Date() });
+		await team.save();
+
+		// Track membership on player side for consistency (as a special 'Staff' entry)
+		if (member.userType === 'player') {
+			member.playerInfo = member.playerInfo || {};
+			member.playerInfo.joinedTeams = member.playerInfo.joinedTeams || [];
+			const alreadyJoined = member.playerInfo.joinedTeams.find((jt) => jt.team?.toString() === team._id.toString() && jt.game === 'Staff' && jt.isActive);
+			if (!alreadyJoined) {
+				member.playerInfo.joinedTeams.push({ team: team._id, game: 'Staff', role: role, joinedAt: new Date(), isActive: true });
+				await member.save();
+			}
+		}
+
+		return res.status(200).json({ success: true, message: 'Staff user added to team' });
+	} catch (error) {
+		console.error('Error in addStaffDirect:', error);
+		return res.status(500).json({ success: false, message: 'Failed to add staff', error: error.message });
+	}
+};
+
 
 module.exports = {
   getUsers,
@@ -1455,5 +1559,7 @@ module.exports = {
   cancelRosterInvite,
   cancelStaffInvite,
   cancelStaffInviteByUsername,
-  leaveTeam
+  leaveTeam,
+  getCurrentUserProfile,
+  addStaffDirect
 };

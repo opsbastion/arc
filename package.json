@@ -1,0 +1,23 @@
+{
+  "name": "workspace",
+  "version": "1.0.0",
+  "main": "test-db-connection.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/opsbastion/arc.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/opsbastion/arc/issues"
+  },
+  "homepage": "https://github.com/opsbastion/arc#readme",
+  "description": "",
+  "dependencies": {
+    "axios": "^1.11.0"
+  }
+}
